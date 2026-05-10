@@ -272,68 +272,39 @@ Same shape, but home cell is widened to `dnx` because the closest peer is more t
 
 Used to advertise long-haul routing paths through the mesh, concentrating traffic onto specific repeaters. Unlike Coverage mapping (which describes *who I can reach*), Distant Link describes *what far-away path I am part of*.
 
-Distant Link comes in two forms:
+A Distant Link entry is a **corridor entry**: `gcd-A+B[+C…]`, two or more geohashes joined with `+`. It means "I am on the long-haul path connecting all listed cells." The entry is symmetric and bidirectional — every repeater participating on the corridor publishes the **same string**, so traffic flows naturally between any pair of anchors via any participating hop.
 
-1. **Directional pin** — `gcd-X` (one geohash). "Route X-bound traffic through me." Useful for asymmetric upstream/downstream relationships and adjacent-cell preference forcing.
-2. **Corridor entry** — `gcd-A+B[+C…]` (two or more geohashes joined with `+`). "I am on the long-haul path connecting all listed cells." Symmetric and bidirectional: every repeater on the corridor publishes the **same string**, so traffic flows naturally between any pair of anchors via any participating hop.
-
-#### Common rules
+#### Rules
 
 - Use `gcd` prefix to denote a distant link region.
-- Only use precision 2-4 for any geohash in the entry.
-- Each distant link is published as its own `gcd-` entry. A repeater may publish multiple.
-- Geohash characters MUST be lowercase.
-- **Neighbor selectors are not used in `gcd-` entries.** All `+`-separated parts after the prefix are geohash anchors. To express coverage shape of a remote cell, the repeater in that cell advertises its own `gc-` entry with a selector; the long-haul publisher does not assert it.
-
-#### Directional pin (`gcd-X`)
-
-- Single geohash only — no `+` segments.
-- Non-adjacent targets are strongly preferred — adjacent targets are the Coverage mapping case and SHOULD be expressed there instead.
-- Adjacent targets ARE permitted when a directional preference must be enforced over an otherwise ambiguous coverage relationship (e.g., two repeaters in adjacent cells where one is the explicit upstream).
-- To widen a vertex target across multiple cells, publish multiple pins (e.g., `gcd-dnz`, `gcd-dqb`, `gcd-dq8`). The remote repeater's own `gc-` entries are the authoritative source for its coverage shape.
-- Do NOT include the home cell in a `gcd-` directional pin. The entry describes the *target* only; the home cell is implied by the publishing repeater.
-
-#### Corridor entry (`gcd-A+B[+C…]`)
-
 - Two or more geohashes joined by `+`. All anchors are peers; the entry is symmetric.
+- Only use precision 2-4 for any geohash in the entry.
+- Each distant link is published as its own `gcd-` entry. A repeater may publish multiple corridors.
 - Every repeater participating on the corridor publishes the **identical string**. This is the mechanism that replaces per-hop pairwise pinning.
 - **Canonical order:** geohashes MUST be emitted in ASCII-lexicographic order (e.g., `dnh+dnq+dnw`, not `dnw+dnh+dnq`). Parsers SHOULD accept any order on input but MUST reject duplicates.
+- Geohash characters MUST be lowercase. All `+`-separated parts after the prefix are geohash anchors — neighbor selectors are not used in `gcd-` entries.
 - Mixed precisions are allowed (e.g., `gcd-dn+dq` pairs two p=2 anchors; `gcd-dnh+dq` pairs a p=3 hop with a p=2 anchor). Use the lowest precision that unambiguously identifies the anchor.
-- Each anchor SHOULD be non-adjacent to the others. Adjacent anchors are pointless on a corridor entry — use Coverage mapping or a directional pin instead.
+- Each anchor SHOULD be non-adjacent to the others. Adjacent anchors are pointless on a corridor entry — use Coverage mapping instead.
+- A publishing repeater’s own home cell SHOULD appear as one of the anchors when it is itself a hop on the corridor. This makes the corridor discoverable from the publisher’s end and avoids implicit asymmetry.
+- To express coverage shape of a remote cell, the repeater in that cell advertises its own `gc-` entry with a selector; the long-haul publisher does not assert it.
 
 > [!TIP] How a corridor entry replaces pairwise pinning  
-> Before corridor entries, every repeater on a long-haul path had to publish a directional pin pointing at *every* other anchor (and downstream relays needed pins to both ends). With a corridor entry, every participating repeater publishes the **one identical string** — e.g., `gcd-dnh+dq` for an Atlanta⇄DC corridor, or `gcd-dnh+dnq+dnw+dq` for a multi-hop route through Charlotte and Richmond. Subscribers see traffic destined for any anchor flow naturally along the path, in either direction, with no asymmetric configuration.
+> A corridor entry lets every repeater on a long-haul path publish the **one identical string** — e.g., `gcd-dnh+dq` for an Atlanta⇄DC corridor, or `gcd-dnh+dnq+dnw+dq` for a multi-hop route through Charlotte and Richmond. Subscribers see traffic destined for any anchor flow naturally along the path, in either direction, with no asymmetric configuration.
 
 #### Example
 
 Home repeater is at `dnxh` (Roanoke). Each row is a separate `gcd-` advertisement.
 
-| Scenario | Form | Region String |
-|----------|------|---------------|
-| Long-haul directional pin toward p=2 cell `dq` | pin | `gcd-dq` |
-| Pin toward a p=3 cell `dqb` to the NE | pin | `gcd-dqb` |
-| Forced directional preference to adjacent cell `dnw` (W) | pin | `gcd-dnw` |
-| Pin upstream toward a southern p=3 cell | pin | `gcd-dnj` |
-| Roanoke⇄DC corridor (any hop on the route) | corridor (2 anchors) | `gcd-dn+dq` |
-| Atlanta⇄Charlotte⇄Richmond⇄DC corridor (any hop) | corridor (4 anchors) | `gcd-dnh+dnq+dnw+dq` |
+| Scenario | Anchors | Region String |
+|----------|---------|---------------|
+| Roanoke⇄DC corridor at p=2 | `dn`, `dq` | `gcd-dn+dq` |
+| Roanoke⇄DC corridor with finer Roanoke anchor | `dnx`, `dq` | `gcd-dnx+dq` |
+| Atlanta⇄Roanoke corridor | `dnh`, `dnx` | `gcd-dnh+dnx` |
+| Atlanta⇄Charlotte⇄Richmond⇄DC multi-hop | `dnh`, `dnq`, `dnw`, `dq` | `gcd-dnh+dnq+dnw+dq` |
 
 #### Visual Examples
 
-Conventions: each grid is **anchored on the target cell** (or one of the anchors), marked with `*` for a directional pin's target. For corridor entries, all listed anchors are marked with `+` and shown in their relative positions if co-locatable; otherwise listed beside the grid. `■` = cell(s) included in the entry, `□` = not part of this entry. The home repeater (`dnxh`) is somewhere off-grid unless explicitly noted.
-
-**Long-haul directional pin to `dq`** — `gcd-dq`
-
-Single p=2 target cell, no neighbor selector. The target stands alone; home (`dnxh` in `dn`) is many cells away to the SW.
-
-| ■\* dq |
-|---|
-
-**Adjacent directional pin W** — `gcd-dnw`
-
-Forces westbound traffic through home toward the repeater in `dnw`. Single p=3 target cell, no neighbor selector. Adjacent target is allowed here because it expresses *direction of preference*, not coverage. (Home `dnx` is the cell immediately E of the target and is not shown.)
-
-| ■\* dnw |
-|---|
+Conventions: all listed anchors are marked with `+` and shown in their relative positions if co-locatable; otherwise listed beside the grid. `■` = anchor cell, `□` = not part of this entry. Geographic positions are illustrative (not to scale).
 
 **Two-anchor corridor** — `gcd-dn+dq`
 
@@ -344,9 +315,10 @@ Roanoke⇄DC long-haul. Both p=2 cells are anchors; every repeater on the route 
 
 **Four-anchor corridor** — `gcd-dnh+dnq+dnw+dq`
 
-Atlanta⇄Charlotte⇄Richmond⇄DC. Four anchors in lex order. Geographic positions are illustrative (not to scale); what matters for the spec is that every participating repeater — at any hop — publishes the same string.
+Atlanta⇄Charlotte⇄Richmond⇄DC. Four anchors in lex order; every participating repeater — at any hop — publishes the same string.
 
 | ■+ dnw | □   | ■+ dq  |
 |--------|------|--------|
 | ■+ dnq | □   | □     |
 | ■+ dnh | □   | □     |
+
