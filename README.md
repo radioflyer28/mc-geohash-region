@@ -47,7 +47,7 @@ This spec exists to give MeshCore operators a small, predictable vocabulary for 
     - https://en.wikipedia.org/wiki/Geohash
     - https://www.geohash.es/browse
 2. Prefix geohash with `gc-` to avoid collisions with ISO-3166-2 like codes currently in use.
-3. Separators: use `-` between the prefix and the geohash; use `+` to introduce the neighbor selector and to join multiple selector tokens (see Neighbor Selector below).
+3. Separators: use `-` between the prefix and the geohash. The `+` separator has two roles: in `gc-` entries it introduces the neighbor selector and joins selector tokens; in `gcd-` entries it joins multiple geohash anchors in a corridor entry (see Distant Link).
 4. Must set repeater's region to precisions 2, 3, 4 for its current location.
 5. May use neighbor selector extension to define additional region(s), however, not in leu of the mandatory 2-4 precision regions outlined above.
     - For example, geohash cell edges/verticies may adversely divide cities, so operators may wish to enlargen the region to correctly encompass the city/metro.
@@ -68,11 +68,11 @@ The precision 4 geohash for a repeater in Roanoke, VA is `dnxh`, thus determinin
 - *Region:* a geohash-based identifier (with optional extensions) that a repeater publishes and users/clients subscribe to. The fundamental unit of this spec.
 - *Entry / Advertisement:* a single complete region string published by a repeater (e.g., `gc-dnxh+W..N`). A repeater publishes one or more entries.
 - *Prefix:* the leading `gc` or `gcd` token identifying the entry type.
-- *Selector:* the optional `+`-introduced string after a geohash that names which neighbor cells (and optionally the home/target cell) belong to the entry. Built from compass tokens (`N`, `NE`, `E`, `SE`, `S`, `SW`, `W`, `NW`), the open token `O`, the clockwise arc shorthand `A..B`, and the reserved token `ALL`. Example: the `+W..N+O` in `gc-dnxh+W..N+O`.
+- *Selector:* the optional `+`-introduced string after a geohash in a `gc-` entry that names which neighbor cells (and optionally the home cell itself) belong to the entry. Built from compass tokens (`N`, `NE`, `E`, `SE`, `S`, `SW`, `W`, `NW`), the open token `O`, the clockwise arc shorthand `A..B`, and the reserved token `ALL`. Example: the `+W..N+O` in `gc-dnxh+W..N+O`. Selectors are not used in `gcd-` entries.
+- *Corridor entry:* a `gcd-` entry naming two or more geohashes joined by `+` (e.g., `gcd-dnh+dnq+dnw`). All listed cells are anchors of a shared long-haul path; every repeater along the corridor publishes the same string. See Distant Link.
 - *Precision (p):* the number of geohash characters in the cell identifier. This spec supports p=2, 3, and 4. Higher precision = smaller cell.
 - *Home repeater:* the repeater being evaluated for region configuration.
 - *Home cell:* the geohash cell containing the home repeater's physical location, at the precision being expressed. Distinct from "home repeater" which is the device.
-- *Target cell:* in a `gcd-` entry, the geohash cell that a neighbor selector's bits apply to. (For `gc-` entries the neighbor selector applies to the home cell, so this term is unnecessary there.)
 - *Neighbor cell:* any of the 8 geohash cells immediately surrounding (N, NE, E, SE, S, SW, W, NW) a given cell at the same precision.
 - *Adjacent:* sharing an edge or vertex with the home cell at the precision under discussion (i.e., one of the 8 neighbor cells, or the home cell itself).
 - *Non-adjacent:* at least one cell removed from the home cell in any direction at the precision under discussion.
@@ -94,11 +94,11 @@ Used to add neighboring cells to a region where shapes are irregular or the repe
 - Wrap-around past N is allowed (e.g., `NE..NW` covers 7 cells, wrapping past S).
 - `A..A` is not allowed; use the bare token (e.g., `N`, not `N..N`). Arcs MUST cover ≥ 2 cells.
 - Reserved token `ALL` = the full ring of 8 neighbors. Use `ALL` instead of `N..NW`.
-- Token `O` (open) excludes the home cell (or target cell, for `gcd-` entries). Allows defining donuts or C/L-shapes. When present, `O` MUST be the last token.
+- Token `O` (open) excludes the home cell. Allows defining donuts or C/L-shapes. When present, `O` MUST be the last token.
 - Canonical output order: directions and arcs listed in **clockwise order starting from N**, then `O` if present. Parsers SHOULD accept any order on input but emitters MUST produce canonical order.
-- Tokens are case-insensitive on input; emit uppercase.
+- Tokens are case-insensitive on input; emit uppercase. Geohash characters are always lowercase. (Selectors are only used in `gc-` entries; `gcd-` entries never carry selectors, so this grammar is unambiguous within each entry type.)
 - Empty selector (no neighbors, home cell only) → omit the `+` and the selector entirely.
-- All tokens are ASCII: 1 char = 1 byte under UTF-8. Worst case at p=4 is using all tokens `gcd-dnxh+N+NE+E+SE+S+SW+W+NW+O` = 30 bytes, but in this case +ALL+O should be used instead.
+- All tokens are ASCII: 1 char = 1 byte under UTF-8. Worst case at p=4 is using all tokens `gc-dnxh+N+NE+E+SE+S+SW+W+NW+O` = 30 bytes, but in this case +ALL+O should be used instead.
 
 #### Token reference
 
@@ -107,7 +107,7 @@ Used to add neighboring cells to a region where shapes are irregular or the repe
 | `N`, `NE`, `E`, `SE`, `S`, `SW`, `W`, `NW` | Single compass neighbor             |
 | `A..B` | Clockwise arc from `A` through `B`, inclusive (≥ 2 cells)       |
 | `ALL`  | All 8 neighbors (full ring)                                     |
-| `O`    | Open: exclude home/target cell. MUST appear last when present.  |
+| `O`    | Open: exclude home cell. MUST appear last when present.         |
 
 #### Examples
 
@@ -270,34 +270,83 @@ Same shape, but home cell is widened to `dnx` because the closest peer is more t
 
 ### Distant Link
 
-Used to advertise a directed path to a far-away region, forcing traffic to flow toward that region via this repeater. Unlike Coverage mapping (which describes *who I can reach*), Distant Link describes *where traffic should be routed through me to reach*. This is the mechanism for pinning down deterministic long-haul paths through the mesh and concentrate traffic to specific repeaters for the purpose.
+Used to advertise long-haul routing paths through the mesh, concentrating traffic onto specific repeaters. Unlike Coverage mapping (which describes *who I can reach*), Distant Link describes *what far-away path I am part of*.
+
+Distant Link comes in two forms:
+
+1. **Directional pin** — `gcd-X` (one geohash). "Route X-bound traffic through me." Useful for asymmetric upstream/downstream relationships and adjacent-cell preference forcing.
+2. **Corridor entry** — `gcd-A+B[+C…]` (two or more geohashes joined with `+`). "I am on the long-haul path connecting all listed cells." Symmetric and bidirectional: every repeater on the corridor publishes the **same string**, so traffic flows naturally between any pair of anchors via any participating hop.
+
+#### Common rules
 
 - Use `gcd` prefix to denote a distant link region.
-- Only use precision 2-4 for the link target.
-- Non-adjacent target cells are strongly preferred — adjacent targets are the Coverage mapping case and SHOULD be expressed there instead.
-- Adjacent targets ARE permitted when a directional preference must be enforced over an otherwise ambiguous coverage relationship (e.g., two repeaters in adjacent cells where one is the explicit upstream).
-- MAY use the neighbor selector extension on the target cell to widen the destination region (e.g., to support multiple alternative paths for nearby repeaters).
-- Do NOT include the home cell in a `gcd` entry. Distant Link entries describe the *target* region only; the home cell is implied by the publishing repeater.
+- Only use precision 2-4 for any geohash in the entry.
 - Each distant link is published as its own `gcd-` entry. A repeater may publish multiple.
+- Geohash characters MUST be lowercase.
+- **Neighbor selectors are not used in `gcd-` entries.** All `+`-separated parts after the prefix are geohash anchors. To express coverage shape of a remote cell, the repeater in that cell advertises its own `gc-` entry with a selector; the long-haul publisher does not assert it.
 
-> [!IMPORTANT] Distant Link is bidirectional by configuration, not by design.  
-> A `gcd-` entry only steers traffic in one direction — toward the target. For the path to actually carry traffic both ways, **every repeater along the route must publish matching entries**:
-> - The far-end repeater must publish a `gcd-` entry pointing back at the near-end region.
-> - Every intermediate repeater along the path must publish `gcd-` entries that include the next hop in the chain.
->
-> *Example:* For an Atlanta ⇄ Washington DC long-haul path, Atlanta-area repeaters publish `gcd-` entries pointing at the DC region, DC-area repeaters publish `gcd-` entries pointing back at Atlanta, and any relay repeaters in between (e.g., Charlotte, Richmond) publish `gcd-` entries pointing at *both* endpoints. Miss any one of those and the path becomes lossy or one-way.
+#### Directional pin (`gcd-X`)
 
-> [!TIP] Convention: shared anchor region  
-> To avoid every repeater on a corridor maintaining a full set of pairwise `gcd-` entries, participating repeaters MAY agree by convention to publish a single shared anchor region — e.g., every repeater on the Atlanta ⇄ DC corridor publishes `gcd-dq` (the DC-area cell) regardless of which end they sit on. Traffic destined for the anchor flows naturally toward DC, and traffic in the reverse direction rides the same advertised path back because every hop along the route already carries the same entry. This trades per-hop directional precision for drastically simpler configuration and is the recommended default for well-known long-haul corridors.
+- Single geohash only — no `+` segments.
+- Non-adjacent targets are strongly preferred — adjacent targets are the Coverage mapping case and SHOULD be expressed there instead.
+- Adjacent targets ARE permitted when a directional preference must be enforced over an otherwise ambiguous coverage relationship (e.g., two repeaters in adjacent cells where one is the explicit upstream).
+- To widen a vertex target across multiple cells, publish multiple pins (e.g., `gcd-dnz`, `gcd-dqb`, `gcd-dq8`). The remote repeater's own `gc-` entries are the authoritative source for its coverage shape.
+- Do NOT include the home cell in a `gcd-` directional pin. The entry describes the *target* only; the home cell is implied by the publishing repeater.
+
+#### Corridor entry (`gcd-A+B[+C…]`)
+
+- Two or more geohashes joined by `+`. All anchors are peers; the entry is symmetric.
+- Every repeater participating on the corridor publishes the **identical string**. This is the mechanism that replaces per-hop pairwise pinning.
+- **Canonical order:** geohashes MUST be emitted in ASCII-lexicographic order (e.g., `dnh+dnq+dnw`, not `dnw+dnh+dnq`). Parsers SHOULD accept any order on input but MUST reject duplicates.
+- Mixed precisions are allowed (e.g., `gcd-dn+dq` pairs two p=2 anchors; `gcd-dnh+dq` pairs a p=3 hop with a p=2 anchor). Use the lowest precision that unambiguously identifies the anchor.
+- Each anchor SHOULD be non-adjacent to the others. Adjacent anchors are pointless on a corridor entry — use Coverage mapping or a directional pin instead.
+
+> [!TIP] How a corridor entry replaces pairwise pinning  
+> Before corridor entries, every repeater on a long-haul path had to publish a directional pin pointing at *every* other anchor (and downstream relays needed pins to both ends). With a corridor entry, every participating repeater publishes the **one identical string** — e.g., `gcd-dnh+dq` for an Atlanta⇄DC corridor, or `gcd-dnh+dnq+dnw+dq` for a multi-hop route through Charlotte and Richmond. Subscribers see traffic destined for any anchor flow naturally along the path, in either direction, with no asymmetric configuration.
 
 #### Example
 
 Home repeater is at `dnxh` (Roanoke). Each row is a separate `gcd-` advertisement.
 
-| Scenario | Target | Region String |
-|----------|--------|-------|
-| Long-haul link to a repeater in p=2 cell `dq` (offshore example) | `dq` (p=2) | `gcd-dq` |
-| Link to a p=3 cell `dqb` to the NE | `dqb` | `gcd-dqb` |
-| Link to a repeater near a cell vertex in `dnz`, also serving `dqb` (E) and `dq8` (SE) | `dnz` + neighbors E,SE | `gcd-dnz+E+SE` |
-| Forced directional preference to adjacent cell `dnw` (W) | `dnw` | `gcd-dnw` |
-| Pin upstream toward a southern p=3 cell | `dnj` (p=3) | `gcd-dnj` |
+| Scenario | Form | Region String |
+|----------|------|---------------|
+| Long-haul directional pin toward p=2 cell `dq` | pin | `gcd-dq` |
+| Pin toward a p=3 cell `dqb` to the NE | pin | `gcd-dqb` |
+| Forced directional preference to adjacent cell `dnw` (W) | pin | `gcd-dnw` |
+| Pin upstream toward a southern p=3 cell | pin | `gcd-dnj` |
+| Roanoke⇄DC corridor (any hop on the route) | corridor (2 anchors) | `gcd-dn+dq` |
+| Atlanta⇄Charlotte⇄Richmond⇄DC corridor (any hop) | corridor (4 anchors) | `gcd-dnh+dnq+dnw+dq` |
+
+#### Visual Examples
+
+Conventions: each grid is **anchored on the target cell** (or one of the anchors), marked with `*` for a directional pin's target. For corridor entries, all listed anchors are marked with `+` and shown in their relative positions if co-locatable; otherwise listed beside the grid. `■` = cell(s) included in the entry, `□` = not part of this entry. The home repeater (`dnxh`) is somewhere off-grid unless explicitly noted.
+
+**Long-haul directional pin to `dq`** — `gcd-dq`
+
+Single p=2 target cell, no neighbor selector. The target stands alone; home (`dnxh` in `dn`) is many cells away to the SW.
+
+| ■\* dq |
+|---|
+
+**Adjacent directional pin W** — `gcd-dnw`
+
+Forces westbound traffic through home toward the repeater in `dnw`. Single p=3 target cell, no neighbor selector. Adjacent target is allowed here because it expresses *direction of preference*, not coverage. (Home `dnx` is the cell immediately E of the target and is not shown.)
+
+| ■\* dnw |
+|---|
+
+**Two-anchor corridor** — `gcd-dn+dq`
+
+Roanoke⇄DC long-haul. Both p=2 cells are anchors; every repeater on the route between them publishes this exact string.
+
+| ■+ dn | ■+ dq |
+|-------|-------|
+
+**Four-anchor corridor** — `gcd-dnh+dnq+dnw+dq`
+
+Atlanta⇄Charlotte⇄Richmond⇄DC. Four anchors in lex order. Geographic positions are illustrative (not to scale); what matters for the spec is that every participating repeater — at any hop — publishes the same string.
+
+| ■+ dnw | □   | ■+ dq  |
+|--------|------|--------|
+| ■+ dnq | □   | □     |
+| ■+ dnh | □   | □     |
